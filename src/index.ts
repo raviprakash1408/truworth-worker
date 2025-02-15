@@ -1,4 +1,4 @@
-import { DurableObject, DurableObjectStorage, Request, Response, ExportedHandler } from "@cloudflare/workers-types";
+import type { DurableObjectState, DurableObjectStorage, ExportedHandlerFetchHandler } from "@cloudflare/workers-types";
 
 interface Document {
 	id: string;
@@ -179,9 +179,9 @@ export default {
 	 * @param ctx - The execution context of the Worker
 	 * @returns The response to be sent back to the client
 	 */
-	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+	fetch: (async (request: Request, env: Env, ctx: ExecutionContext) => {
 		const id = env.MY_DURABLE_OBJECT.idFromName('documents');
 		const stub = env.MY_DURABLE_OBJECT.get(id);
-		return stub.fetch(request.url) as Promise<Response>;
-	},
-} satisfies ExportedHandler<Env>;
+		return stub.fetch(request);
+	})
+};
