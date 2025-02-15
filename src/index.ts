@@ -1,20 +1,28 @@
-import { DurableObject } from "cloudflare:workers";
+import { DurableObject, DurableObjectStorage, Request, Response, ExportedHandler } from "@cloudflare/workers-types";
 
-/**
- * Welcome to Cloudflare Workers! This is your first Durable Objects application.
- *
- * - Run `npm run dev` in your terminal to start a development server
- * - Open a browser tab at http://localhost:8787/ to see your Durable Object in action
- * - Run `npm run deploy` to publish your application
- *
- * Bind resources to your worker in `wrangler.jsonc`. After adding bindings, a type definition for the
- * `Env` object can be regenerated with `npm run cf-typegen`.
- *
- * Learn more at https://developers.cloudflare.com/durable-objects
- */
+interface Document {
+	id: string;
+	title: string;
+	type: string;
+	status: 'Pending' | 'Processed' | 'Needs Review';
+	createdAt: string;
+	urls: string[];
+	analysisResult?: any;
+	selections?: Selection[];
+}
+
+interface Selection {
+	id: number;
+	color: string;
+	points: number[];
+	text: string;
+	type: string;
+}
 
 /** A Durable Object's behavior is defined in an exported Javascript class */
-export class MyDurableObject extends DurableObject<Env> {
+export class MyDurableObject implements DurableObject {
+	private storage: DurableObjectStorage;
+
 	/**
 	 * The constructor is invoked once upon creation of the Durable Object, i.e. the first call to
 	 * 	`DurableObjectStub::get` for a given identifier (no-op constructors can be omitted)
@@ -23,7 +31,7 @@ export class MyDurableObject extends DurableObject<Env> {
 	 * @param env - The interface to reference bindings declared in wrangler.jsonc
 	 */
 	constructor(ctx: DurableObjectState, env: Env) {
-		super(ctx, env);
+		this.storage = ctx.storage;
 	}
 
 	/**
@@ -36,6 +44,158 @@ export class MyDurableObject extends DurableObject<Env> {
 	async sayHello(name: string): Promise<string> {
 		return `Hello, ${name}!`;
 	}
+
+	async fetch(request: Request): Promise<Response> {
+		const corsHeaders = {
+			'Access-Control-Allow-Origin': '*',
+			'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+			'Access-Control-Allow-Headers': 'Content-Type',
+		};
+
+		if (request.method === 'OPTIONS') {
+			return new Response(null, { headers: corsHeaders });
+		}
+
+		const url = new URL(request.url);
+		const path = url.pathname;
+
+		try {
+			// Document List Endpoint
+			if (path === '/api/documents' && request.method === 'GET') {
+				const documents = await this.storage.get('all_documents');
+				return new Response(JSON.stringify(documents || []), {
+					headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+				});
+			}
+
+			// Single Document Endpoint
+			if (path.match(/^\/api\/documents\/[\w-]+$/) && request.method === 'GET') {
+				const documentId = path.split('/').pop()!;
+				const document = await this.storage.get(documentId);
+				
+				if (!document) {
+					return new Response(JSON.stringify({ error: 'Document not found' }), {
+						status: 404,
+						headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+					});
+				}
+
+				return new Response(JSON.stringify(document), {
+					headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+				});
+			}
+
+			// Upload Document Endpoint
+			if (path === '/api/upload' && request.method === 'POST') {
+				const { images, documentTitle, documentType } = await request.json() as {
+					images: string[];
+					documentTitle: string;
+					documentType: string;
+				};
+				
+				const documentId = `doc_${Date.now()}`;
+				const newDocument: Document = {
+					id: documentId,
+					title: documentTitle,
+					type: documentType,
+					status: 'Pending',
+					createdAt: new Date().toISOString(),
+					urls: images,
+				};
+
+				// Update documents list
+				const existingDocs = (await this.storage.get('all_documents') || []) as Document[];
+				existingDocs.unshift(newDocument);
+				await this.storage.put('all_documents', existingDocs);
+				
+				// Store individual document
+				await this.storage.put(documentId, newDocument);
+
+				return new Response(JSON.stringify({ success: true, documentId }), {
+					headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+				});
+			}
+
+			// Process Document Endpoint
+			if (path === '/api/process-document' && request.method === 'POST') {
+				const { imageUrls: _ } = await request.json() as { imageUrls: string[] };
+				
+				const analysisResult = {
+					status: 'Processed',
+					documents: {
+						page1: {
+							status: 'Processed',
+							detections: [
+								{
+									type: 'Drug Name',
+									text: 'Amoxicillin',
+									confidence: 'high',
+									points: [100, 100, 200, 100, 200, 150, 100, 150],
+								}
+							],
+						},
+					},
+				};
+
+				return new Response(JSON.stringify({ 
+					success: true, 
+					analysis: analysisResult
+				}), {
+					headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+				});
+			}
+
+			// Update Document Selections Endpoint
+			if (path.match(/^\/api\/documents\/[\w-]+\/selections$/) && request.method === 'PUT') {
+				const documentId = path.split('/')[3];
+				const { selections } = await request.json() as { selections: Selection[] };
+				
+				const document = await this.storage.get(documentId) as Document;
+				if (document) {
+					document.selections = selections;
+					await this.storage.put(documentId, document);
+				}
+
+				return new Response(JSON.stringify({ success: true }), {
+					headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+				});
+			}
+
+			// Update Document Status Endpoint
+			if (path.match(/^\/api\/documents\/[\w-]+\/status$/) && request.method === 'PUT') {
+				const documentId = path.split('/')[3];
+				const { status } = await request.json() as { status: 'Pending' | 'Processed' | 'Needs Review' };
+				
+				const document = await this.storage.get(documentId) as Document;
+				if (document) {
+					document.status = status;
+					await this.storage.put(documentId, document);
+
+					// Update in all_documents list
+					const allDocs = (await this.storage.get('all_documents') || []) as Document[];
+					const updatedDocs = allDocs.map((doc: Document) => 
+						doc.id === documentId ? { ...doc, status } : doc
+					);
+					await this.storage.put('all_documents', updatedDocs);
+				}
+
+				return new Response(JSON.stringify({ success: true }), {
+					headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+				});
+			}
+
+			return new Response(JSON.stringify({ error: 'Not found' }), {
+				status: 404,
+				headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+			});
+
+		} catch (error) {
+			return new Response(JSON.stringify({ error: 'Internal server error' }), {
+				status: 500,
+				headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+			});
+		}
+	}
 }
 
 export default {
@@ -47,19 +207,9 @@ export default {
 	 * @param ctx - The execution context of the Worker
 	 * @returns The response to be sent back to the client
 	 */
-	async fetch(request, env, ctx): Promise<Response> {
-		// We will create a `DurableObjectId` using the pathname from the Worker request
-		// This id refers to a unique instance of our 'MyDurableObject' class above
-		let id: DurableObjectId = env.MY_DURABLE_OBJECT.idFromName(new URL(request.url).pathname);
-
-		// This stub creates a communication channel with the Durable Object instance
-		// The Durable Object constructor will be invoked upon the first call for a given id
-		let stub = env.MY_DURABLE_OBJECT.get(id);
-
-		// We call the `sayHello()` RPC method on the stub to invoke the method on the remote
-		// Durable Object instance
-		let greeting = await stub.sayHello("world");
-
-		return new Response(greeting);
+	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+		const id = env.MY_DURABLE_OBJECT.idFromName('documents');
+		const stub = env.MY_DURABLE_OBJECT.get(id);
+		return stub.fetch(request.url) as Promise<Response>;
 	},
 } satisfies ExportedHandler<Env>;
