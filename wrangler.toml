@@ -1,0 +1,35 @@
+name = "truworth-worker"
+main = "src/index.ts"
+compatibility_date = "2025-02-14"
+
+# Durable Objects configuration
+[[migrations]]
+tag = "v1"
+new_classes = ["MyDurableObject"]
+
+[[durable_objects.bindings]]
+name = "MY_DURABLE_OBJECT"
+class_name = "MyDurableObject"
+
+[observability]
+enabled = true
+
+# The following sections are commented out but available for use:
+
+# Smart Placement
+# [placement]
+# mode = "smart"
+
+# Environment Variables
+# [vars]
+# MY_VARIABLE = "production_value"
+
+# Static Assets
+# [assets]
+# directory = "./public/"
+# binding = "ASSETS"
+
+# Service Bindings
+# [[services]]
+# binding = "MY_SERVICE"
+# service = "my-service" 
