@@ -156,6 +156,35 @@ export class MyDurableObject implements DurableObject {
 				});
 			}
 
+			// Update Document Endpoint
+			if (path.match(/^\/api\/documents\/[\w-]+$/) && request.method === 'PUT') {
+				const documentId = path.split('/').pop()!;
+				const updates = await request.json() as Partial<Document>;
+				
+				const document = await this.storage.get(documentId) as Document;
+				if (!document) {
+					return new Response(JSON.stringify({ error: 'Document not found' }), {
+						status: 404,
+						headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+					});
+				}
+
+				// Update document
+				const updatedDocument = { ...document, ...updates };
+				await this.storage.put(documentId, updatedDocument);
+
+				// Update in all_documents list
+				const allDocs = (await this.storage.get('all_documents') || []) as Document[];
+				const updatedDocs = allDocs.map((doc) => 
+					doc.id === documentId ? updatedDocument : doc
+				);
+				await this.storage.put('all_documents', updatedDocs);
+
+				return new Response(JSON.stringify(updatedDocument), {
+					headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+				});
+			}
+
 			return new Response(JSON.stringify({ error: 'Not found' }), {
 				status: 404,
 				headers: { ...corsHeaders, 'Content-Type': 'application/json' },
