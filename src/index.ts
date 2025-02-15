@@ -68,6 +68,38 @@ export class MyDurableObject implements DurableObject {
 				});
 			}
 
+			// Create Document Endpoint
+			if (path === '/api/documents' && request.method === 'POST') {
+				const { title, type, urls } = await request.json() as {
+					title: string;
+					type: string;
+					urls: string[];
+				};
+				
+				const documentId = `doc_${Date.now()}`;
+				const newDocument: Document = {
+					id: documentId,
+					title,
+					type,
+					status: 'Pending',
+					createdAt: new Date().toISOString(),
+					urls,
+				};
+
+				// Update documents list
+				const existingDocs = (await this.storage.get('all_documents') || []) as Document[];
+				existingDocs.unshift(newDocument);
+				await this.storage.put('all_documents', existingDocs);
+				
+				// Store individual document
+				await this.storage.put(documentId, newDocument);
+
+				return new Response(JSON.stringify(newDocument), {
+					status: 201,
+					headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+				});
+			}
+
 			// Single Document Endpoint
 			if (path.match(/^\/api\/documents\/[\w-]+$/) && request.method === 'GET') {
 				const documentId = path.split('/').pop()!;
@@ -81,66 +113,6 @@ export class MyDurableObject implements DurableObject {
 				}
 
 				return new Response(JSON.stringify(document), {
-					headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-				});
-			}
-
-			// Upload Document Endpoint
-			if (path === '/api/upload' && request.method === 'POST') {
-				const { images, documentTitle, documentType } = await request.json() as {
-					images: string[];
-					documentTitle: string;
-					documentType: string;
-				};
-				
-				const documentId = `doc_${Date.now()}`;
-				const newDocument: Document = {
-					id: documentId,
-					title: documentTitle,
-					type: documentType,
-					status: 'Pending',
-					createdAt: new Date().toISOString(),
-					urls: images,
-				};
-
-				// Update documents list
-				const existingDocs = (await this.storage.get('all_documents') || []) as Document[];
-				existingDocs.unshift(newDocument);
-				await this.storage.put('all_documents', existingDocs);
-				
-				// Store individual document
-				await this.storage.put(documentId, newDocument);
-
-				return new Response(JSON.stringify({ success: true, documentId }), {
-					headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-				});
-			}
-
-			// Process Document Endpoint
-			if (path === '/api/process-document' && request.method === 'POST') {
-				const { imageUrls: _ } = await request.json() as { imageUrls: string[] };
-				
-				const analysisResult = {
-					status: 'Processed',
-					documents: {
-						page1: {
-							status: 'Processed',
-							detections: [
-								{
-									type: 'Drug Name',
-									text: 'Amoxicillin',
-									confidence: 'high',
-									points: [100, 100, 200, 100, 200, 150, 100, 150],
-								}
-							],
-						},
-					},
-				};
-
-				return new Response(JSON.stringify({ 
-					success: true, 
-					analysis: analysisResult
-				}), {
 					headers: { ...corsHeaders, 'Content-Type': 'application/json' },
 				});
 			}
